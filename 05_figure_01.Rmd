@@ -1,0 +1,231 @@
+### Importing Required Libraries and Data (Notes and Ratings)
+---
+title: "Twitter's Birdwatch Platform: Replicating Figures from the Original Paper"
+runtime: shiny
+author: "RStudio"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: "html_document"
+---
+
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(here)
+notes <- read_tsv(here("data/notes.tsv"))
+ratings <- read_tsv(here("data/complete_filtered_ratings.tsv"))
+head(notes)
+head(ratings)
+library(forcats)
+```
+
+### Figure 2: Distribution of Birdwatch Notes by Classification and Trustworthiness
+```{r, fig.width=6, fig.height=3}
+library(ggplot2)
+notes %>% mutate(classification = ifelse(classification == "MISINFORMED_OR_POTENTIALLY_MISLEADING", "Misleading", "Not Misleading")) %>%
+  mutate(trustworthiness = ifelse(trustworthySources == 1, "Trustworthy Sources", "No Trustworthy Sources")) %>%
+  ggplot(aes(y = classification, fill = trustworthiness)) +
+  geom_bar() +
+  scale_fill_manual(
+    values = c("No Trustworthy Sources" = "yellow", "Trustworthy Sources" = "#4141db")) +
+  labs(x = "Count", y = "Classification", fill = "Trustworthiness") +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+ ### Figure 3: Types of Misleading Birdwatch Notes
+```{r}
+notes_misleading <- notes %>% rename(Other = misleadingOther,  
+Factual_Error = misleadingFactualError, Missing_Important_Context = misleadingMissingImportantContext, 
+Unverified_Claim_As_Fact = misleadingUnverifiedClaimAsFact, Outdated_Information = misleadingOutdatedInformation, 
+Satire = misleadingSatire, Manipulated_Media = misleadingManipulatedMedia) %>% 
+summarize(Other = sum(Other, na.rm = TRUE), Factual_Error = sum(Factual_Error, na.rm = TRUE),
+ Manipulated_Media = sum(Manipulated_Media, na.rm = TRUE), Outdated_Information = sum(Outdated_Information, na.rm = TRUE), 
+ Missing_Important_Context = sum(Missing_Important_Context, na.rm = TRUE), Unverified_Claim_As_Fact = sum(Unverified_Claim_As_Fact, na.rm = TRUE), Satire = sum(Satire, na.rm = TRUE))
+notes_misleading <- pivot_longer(notes_misleading, cols = c(Other, Factual_Error, Manipulated_Media, Outdated_Information, Missing_Important_Context, 
+Unverified_Claim_As_Fact, Satire), names_to = "misleadingType", values_to = "count") %>% arrange(desc(count))
+ 
+ggplot(notes_misleading, aes(x = count, y = fct_reorder(misleadingType, count))) +
+  geom_bar(stat = "identity", fill = "red") +
+  theme_minimal() +
+  labs(x = "Number of Birdwatch Notes", y = "Misleading Type")
+```
+
+### Figure 4: Types of Not Misleading Birdwatch Notes
+```{r}
+head(notes)
+notes_not_misleading <- notes %>% rename(Other = notMisleadingOther,  Factually_Correct = notMisleadingFactuallyCorrect, Personal_Opinion = notMisleadingPersonalOpinion, Outdated_But_Not_When_Written = notMisleadingOutdatedButNotWhenWritten, Clearly_Satire = notMisleadingClearlySatire) %>% summarize(Other = sum(Other, na.rm = TRUE), Factually_Correct = sum(Factually_Correct, na.rm = TRUE), Personal_Opinion = sum(Personal_Opinion, na.rm = TRUE), Clearly_Satire = sum(Clearly_Satire, na.rm = TRUE), Outdated_But_Not_When_Written = sum(Outdated_But_Not_When_Written, na.rm = TRUE))
+head(notes_not_misleading)
+notes_not_misleading <- pivot_longer(notes_not_misleading, cols = c(Other, Factually_Correct, Personal_Opinion, Clearly_Satire, Outdated_But_Not_When_Written), names_to = "misleadingType", values_to = "count") %>% arrange(desc(count))
+head(notes_not_misleading)
+ 
+ggplot(notes_not_misleading, aes(x = count, y = fct_reorder(misleadingType, count))) +
+  geom_bar(stat = "identity", fill = "blue") +
+  theme_minimal() +
+  labs(x = "Number of Birdwatch Notes", y = "Not Misleading Type")
+ ```
+### Figure 5c: Distribution of Birdwatch Notes by Classification and Word Count
+ ```{r, fig.width=6, fig.height=3}
+library(scales)
+notes <- notes %>% group_by(classification) %>%
+  mutate(word_count = str_count(summary, boundary("word"))) %>% mutate(total_words = sum(word_count, na.rm = TRUE))
+
+notes %>%
+  group_by(classification) %>%
+  arrange(word_count) %>%
+  mutate(
+    total = n(),
+    ccdf = (1 - (row_number()) / total)*100
+  ) %>%
+  ggplot(aes(x = word_count, y = ccdf, color = classification)) +
+  geom_line() +
+  theme_minimal() +
+  scale_y_log10(limits = c(0.01, 100), label = comma) + theme(legend.position = "top")
+```
+
+### Figure 7a: Distribution of Birdwatch Notes by Classification and Helpful Ratio
+```{r, fig.width=6, fig.height=3}
+# Calculate ratio_helpful for each noteId
+unique(ratings$helpfulnessLevel)
+ 
+ratings_summary <- ratings %>%
+  group_by(noteId) %>%
+  mutate(
+    helpful = if_else(
+      version == 1,
+      helpful,
+      if_else(helpfulnessLevel %in% c("HELPFUL", "SOMEWHAT_HELPFUL"), 1, 0)
+    )
+  ) %>%
+  summarize(
+    total_helpful = sum(helpful == 1, na.rm = TRUE),
+    total_unhelpful = sum(helpful == 0, na.rm = TRUE)
+  ) %>%
+  mutate(
+    total = total_helpful + total_unhelpful,
+    ratio_helpful = ifelse(total == 0, NA, total_helpful / total)
+  )
+ 
+# Join with notes and calculate CCDF by classification
+notes_ratings <- notes %>%
+  inner_join(ratings_summary, by = "noteId") %>%
+  group_by(classification) %>%
+  arrange(ratio_helpful) %>%
+  mutate(
+    rank = min_rank(ratio_helpful),
+    n = n(),
+    ccdf = (1 - ((rank-1) / n)) * 100
+  )
+ 
+# Plot
+notes_ratings %>%
+  ggplot(aes(x = ratio_helpful, y = ccdf, color = classification)) +
+  geom_line() +
+  theme(legend.position = "top") +
+  labs(x = "Helpful Ratio", y = "CCDF (%)")
+
+ratings_summary
+ 
+```
+
+### Figure 7b: Distribution of Votes by Classification
+```{r, fig.width=6, fig.height=3}
+# Graph 7b
+#View(ratings)
+# Step 1: Calculate ratio_helpful for each noteId
+ratings_summary <- ratings %>%
+  group_by(noteId) %>%
+  mutate(
+    total = total_helpful + total_unhelpful,
+  )
+ 
+# Step 2: Join with notes and calculate CCDF by classification
+notes_ratings <- notes %>%
+  inner_join(ratings_summary, by = "noteId") %>%
+  group_by(classification) %>%
+  arrange(total) %>%
+  mutate(
+    rank = min_rank(total),
+    n = n(),
+    ccdf = (1 - ((rank-1) / n)) * 100
+  )
+ 
+ 
+  notes_ratings
+ 
+# Step 3: Plot
+notes_ratings %>%
+  ggplot(aes(x = total, y = ccdf, color = classification)) +
+  geom_line() +scale_y_log10(limits = c(0.01, 100), label = comma) 
+```
+
+### Figure 8: Distribution of Helpful Ratings
+```{r, fig.width=6, fig.height=3}
+# Graph 8
+#View(ratings)
+nrow(ratings)
+ratings_helpful <- ratings %>% rename(Other = helpfulOther,  Informative = helpfulInformative, Clear = helpfulClear, Empathetic = helpfulEmpathetic, Good_Sources = helpfulGoodSources, Unique_Context = helpfulUniqueContext, Address_Claim = helpfulAddressesClaim, Important_Context = helpfulImportantContext) %>% summarize(Other = sum(Other, na.rm = TRUE), Informative = sum(Informative, na.rm = TRUE), Clear = sum(Clear, na.rm = TRUE), Empathetic = sum(Empathetic, na.rm = TRUE), Good_Sources = sum(Good_Sources, na.rm = TRUE), Unique_Context = sum(Unique_Context, na.rm = TRUE), Address_Claim = sum(Address_Claim, na.rm = TRUE), Important_Context = sum(Important_Context, na.rm = TRUE))
+head(ratings_helpful)
+ratings_helpful <- pivot_longer(ratings_helpful, cols = c(Other, Informative, Clear, Empathetic, Good_Sources, Unique_Context, Address_Claim, Important_Context), names_to = "helpingType", values_to = "count") %>% arrange(desc(count))
+head(ratings_helpful)
+ 
+library(forcats)
+ 
+ggplot(ratings_helpful, aes(x = count, y = fct_reorder(helpingType, count))) +
+  geom_bar(stat = "identity", fill = "blue") +
+  theme_minimal() +
+  labs(x = "Number of Ratings", y = "Helping Type")
+```
+
+### Figure 9: Distribution of Not Helpful Ratings
+```{r, echo=FALSE}
+#Graph 9
+ratings_unhelpful <- ratings %>% rename(Other = notHelpfulOther,  Incorrect = notHelpfulIncorrect, Sources_Missing_Or_Unreliable = notHelpfulSourcesMissingOrUnreliable,  Opinion_Speculation_Or_Bias = notHelpfulOpinionSpeculationOrBias, Missing_Key_Points = notHelpfulMissingKeyPoints, Outdated = notHelpfulOutdated, Hard_To_Understand = notHelpfulHardToUnderstand, Argumentative_Or_Biased = notHelpfulArgumentativeOrBiased, Off_Topic = notHelpfulOffTopic, Spam_Harassment_Or_Abuse = notHelpfulSpamHarassmentOrAbuse, Irrelevant_Sources = notHelpfulIrrelevantSources) %>% summarize(Other = sum(Other, na.rm = TRUE), Incorrect = sum(Incorrect, na.rm = TRUE), Sources_Missing_Or_Unreliable = sum(Sources_Missing_Or_Unreliable, na.rm = TRUE), Opinion_Speculation_Or_Bias = sum(Opinion_Speculation_Or_Bias, na.rm = TRUE), Missing_Key_Points = sum(Missing_Key_Points, na.rm = TRUE), Outdated = sum(Outdated, na.rm = TRUE), Hard_To_Understand = sum(Hard_To_Understand, na.rm = TRUE), Argumentative_Or_Biased = sum(Argumentative_Or_Biased, na.rm = TRUE), Off_Topic = sum(Off_Topic, na.rm = TRUE), Spam_Harassment_Or_Abuse = sum(Spam_Harassment_Or_Abuse, na.rm = TRUE), Irrelevant_Sources = sum(Irrelevant_Sources, na.rm = TRUE))
+head(ratings_unhelpful)
+ratings_unhelpful <- pivot_longer(ratings_unhelpful, cols = c(Other, Incorrect, Sources_Missing_Or_Unreliable,  Opinion_Speculation_Or_Bias, Missing_Key_Points, Outdated, Hard_To_Understand, Argumentative_Or_Biased, Off_Topic, Spam_Harassment_Or_Abuse, Irrelevant_Sources), names_to = "nothelpingType", values_to = "count") %>% arrange(desc(count))
+head(ratings_unhelpful)
+ 
+library(forcats)
+ 
+ggplot(ratings_unhelpful, aes(x = count, y = fct_reorder(nothelpingType, count))) +
+  geom_bar(stat = "identity", fill = "red") +
+  theme_minimal() +
+  labs(x = "Number of Ratings", y = "Not Helping Type")
+```
+
+### Figure 10: Regression Analysis of Helpful Ratings
+```{r}
+source_tweets <- load(here("source_tweets.Rdata"), our_env <- new.env())
+source_tweets <- our_env[["."]]
+source_tweets
+notes_ratings_reg <- inner_join(notes, source_tweets, by = c("noteId")) %>% inner_join(ratings, by = "noteId")
+len <- nrow(notes_ratings_reg)
+ 
+notes_ratings_reg <- mutate(notes_ratings_reg, classification = ifelse(classification == "MISINFORMED_OR_POTENTIALLY_MISLEADING", 1, 0),
+  age = as.integer(interval(source_account_created_at, Sys.Date()) / years(1)), word_count = str_count(summary, boundary("word")))
+ 
+
+ 
+notes_ratings_reg <- mutate(notes_ratings_reg, word_count = scale(word_count), source_followers_count = scale(source_followers_count),
+  source_friends_count = scale(source_friends_count), age = scale(age))
+ 
+ 
+reg_model <- glm(helpful ~ classification + trustworthySources + word_count + source_followers_count + source_verified + source_friends_count +
+  age, family = binomial, data = notes_ratings_reg)
+ 
+ 
+coefficients_ratio <- as.data.frame(summary(reg_model)$coefficients)
+ 
+coefficients_ratio$predictor <- rownames(coefficients_ratio)
+ 
+ggplot(coefficients_ratio) + geom_point(aes(x = predictor, y = Estimate), color = "blue", size = 3, width = 0.3) +
+  geom_errorbar(aes(x = predictor, ymin = Estimate - (2.576 * coefficients_ratio$"Std. Error"),
+  ymax = Estimate + (2.576 * coefficients_ratio$"Std. Error")), width = 0, color = "orange") +
+  labs(x = "Predictor Variables", y = "Coefficient Estimate") +
+  theme_minimal() +
+  scale_y_continuous(limits = c(-0.8, 1.0)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+summary(reg_model)
+
+```
