@@ -229,3 +229,5 @@ ggplot(coefficients_ratio) + geom_point(aes(x = predictor, y = Estimate), color 
 summary(reg_model)
 
 ```
+
+
